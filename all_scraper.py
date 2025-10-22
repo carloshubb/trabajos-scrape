@@ -9,23 +9,25 @@ from urllib.parse import urljoin
 
 BASE_URL = "https://trabajosdiarios.co.cr"
 
-
-import re
-from bs4 import BeautifulSoup
-
-import re
+# List of all locations to scrape
+LOCATIONS = [
+    "https://trabajosdiarios.co.cr/ofertas-trabajo/en-san-jose",
+    "https://trabajosdiarios.co.cr/ofertas-trabajo/en-alajuela",
+    "https://trabajosdiarios.co.cr/ofertas-trabajo/en-cartago",
+    "https://trabajosdiarios.co.cr/ofertas-trabajo/en-guanacaste",
+    "https://trabajosdiarios.co.cr/ofertas-trabajo/en-heredia",
+    "https://trabajosdiarios.co.cr/ofertas-trabajo/en-limon",
+    "https://trabajosdiarios.co.cr/ofertas-trabajo/en-puntarenas"
+]
 
 def extract_experience(soup, job_data):
     """Extract job experience text when it's in the next <dd> tag."""
-
-    # Find the <span> that contains "Experiencia requerida"
     exp_label = soup.find('span', string=re.compile(r'Experiencia requerida', re.IGNORECASE))
 
     if not exp_label:
         job_data['_job_experience'] = None
         return
 
-    # Go up to <dt> and then find the next <dd> sibling
     dt_tag = exp_label.find_parent('dt')
     if not dt_tag:
         job_data['_job_experience'] = None
@@ -104,7 +106,6 @@ def scrape_job_detail(url):
                 job_data['_job_title'] = item.get('title', '').strip()
                 description = item.get('description', '')
                 if description:
-                    # keep newlines as \n
                     description = description.replace('. ', '.\r\n')
                     job_data['_job_description'] = description.strip()
 
@@ -168,20 +169,15 @@ def scrape_job_detail(url):
         if premium_badge:
             job_data['_job_featured'] = True
 
-        # detect filled / urgent if textual indicators exist
         if soup.find(string=re.compile(r'\b(llenad[oa]|filled)\b', re.IGNORECASE)):
             job_data['_job_filled'] = True
         if soup.find(string=re.compile(r'\b(urgente|urgent)\b', re.IGNORECASE)):
             job_data['_job_urgent'] = True
 
-        # --- Extract visible description (keep original newlines) ---
+        # --- Extract visible description ---
         if not job_data['_job_description']:
-            # Prefer the main job description container if available
-            # Use separator='\n' to preserve paragraph/newline structure
-            # Try common containers:
             content_candidates = []
 
-            # 1) Common job detail blocks
             for selector in [
                 'div.job-description', 'div.job-details', 'div.description', 'div.oferta-descripcion',
                 '#job-description', '.descripcion', '.job-content'
@@ -190,10 +186,8 @@ def scrape_job_detail(url):
                 if el:
                     content_candidates.append(el)
 
-            # 2) If a heading "Job details" or similar exists, gather siblings
             detail_section = soup.find(['h2', 'h3'], string=re.compile(r'Job details|Detalle del empleo|Descripción|Descripción del puesto', re.IGNORECASE))
             if detail_section:
-                # collect until next heading
                 current = detail_section.find_next_sibling()
                 collected = []
                 while current and current.name not in ['h1', 'h2', 'h3']:
@@ -205,7 +199,6 @@ def scrape_job_detail(url):
                         wrapper.append(node)
                     content_candidates.append(wrapper)
 
-            # 3) fallback paragraphs
             if not content_candidates:
                 paragraphs = soup.find_all('p')
                 if paragraphs:
@@ -214,7 +207,6 @@ def scrape_job_detail(url):
                         wrapper.append(p)
                     content_candidates.append(wrapper)
 
-            # Choose the largest candidate (most text) and extract with \n separators
             best_text = None
             best_len = 0
             for cand in content_candidates:
@@ -224,33 +216,21 @@ def scrape_job_detail(url):
                     best_text = text
 
             if best_text:
-                # Standardize newlines to \n
                 best_text = best_text.replace('\r\n', '\n').replace('\r', '\n')
                 job_data['_job_description'] = best_text
 
         # --- Extract experience ---
         extract_experience(soup, job_data)
 
-               # --- Extract qualification from visible page ---
-        # qual_elem = soup.find(string=re.compile(r'Required education|Educación requerida|Formación', re.IGNORECASE))
-        # if qual_elem:
-        #     qual_parent = qual_elem.find_parent()
-        #     if qual_parent:
-        #         qual_text = qual_parent.get_text(separator="\n", strip=True)
-        #         qual_text = re.sub(r'(Required education|Educación requerida|Formación):?', '', qual_text, flags=re.IGNORECASE).strip()
-        #         job_data['_job_qualification'] = qual_text
-
-        # --- Category extraction (breadcrumbs, meta keywords, tag links) ---
+        # --- Category extraction ---
         categories = []
 
-        # 1) breadcrumbs
         for sel in ['nav.breadcrumb a', 'ul.breadcrumb a', 'ol.breadcrumb a', '.breadcrumb a']:
             for a in soup.select(sel):
                 txt = a.get_text(strip=True)
                 if txt:
                     categories.append(txt)
 
-        # 2) meta keywords
         meta_kw = soup.find('meta', attrs={'name': re.compile(r'keywords', re.IGNORECASE)})
         if meta_kw and meta_kw.get('content'):
             for kw in re.split(r'[,\|;]', meta_kw['content']):
@@ -258,14 +238,12 @@ def scrape_job_detail(url):
                 if k:
                     categories.append(k)
 
-        # 3) tag/category links (common patterns)
         for sel in ['a[rel="tag"]', 'a.tag', 'a.category', '.tags a', '.categories a', 'a[href*="/categoria/"]', 'a[href*="/categoria-"]']:
             for a in soup.select(sel):
                 txt = a.get_text(strip=True)
                 if txt:
                     categories.append(txt)
 
-        # Normalize & dedupe, keep order
         seen_cats = []
         for c in categories:
             cleaned = re.sub(r'\s+', ' ', c).strip()
@@ -273,7 +251,6 @@ def scrape_job_detail(url):
                 seen_cats.append(cleaned)
 
         if seen_cats:
-            # Join with commas (no spaces after comma per your example)
             job_data['_job_category'] = ','.join(seen_cats)
 
         # --- Featured image ---
@@ -296,8 +273,6 @@ def scrape_job_detail(url):
 
     except Exception as e:
         print(f"  Error scraping job detail: {str(e)}")
-        import traceback
-        traceback.print_exc()
         return None
 
 
@@ -321,13 +296,11 @@ def scrape_job_listings(list_url, max_pages=5, max_jobs=None):
             soup = BeautifulSoup(response.content, 'html.parser')
 
             job_links = []
-            # common pattern for individual jobs
             for link in soup.find_all('a', href=re.compile(r'/trabajo/\d+/')):
                 job_url = urljoin(BASE_URL, link['href'])
                 if job_url not in job_links:
                     job_links.append(job_url)
 
-            # also try containers
             job_containers = soup.find_all(['article', 'div'], class_=re.compile(r'job|oferta|trabajo', re.IGNORECASE))
             for container in job_containers:
                 link = container.find('a', href=re.compile(r'/trabajo/'))
@@ -341,10 +314,7 @@ def scrape_job_listings(list_url, max_pages=5, max_jobs=None):
                 break
 
             print(f"  Found {len(job_links)} jobs")
-            # ct = 1
             for job_url in job_links:
-                # ct += 1
-                # if ct > 2 : continue
                 if max_jobs and len(all_jobs) >= max_jobs:
                     print(f"\n✓ Reached maximum of {max_jobs} jobs")
                     return all_jobs
@@ -372,8 +342,6 @@ def scrape_job_listings(list_url, max_pages=5, max_jobs=None):
 
         except Exception as e:
             print(f"Error scraping listing page: {str(e)}")
-            import traceback
-            traceback.print_exc()
             break
 
     return all_jobs
@@ -395,7 +363,6 @@ def save_jobs_to_csv(jobs, filename='trabajos_diarios_jobs.csv'):
         '_job_tag', '_job_photos', '_job_gender', '_job_map_location'
     ]
 
-    # Use newline='' and convert internal \n -> \r\n so Excel shows line breaks
     with open(filename, 'w', newline='', encoding='utf-8-sig') as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames, extrasaction='ignore', quoting=csv.QUOTE_MINIMAL)
         writer.writeheader()
@@ -411,7 +378,6 @@ def save_jobs_to_csv(jobs, filename='trabajos_diarios_jobs.csv'):
                 elif value is None:
                     csv_data[key] = ''
                 else:
-                    # preserve newlines in description -> convert \n to \r\n for Excel compatibility
                     if key == '_job_description' and isinstance(value, str):
                         csv_data[key] = value.replace('\r\n', '\n').replace('\r', '\n').replace('\n', '\r\n')
                     else:
@@ -423,7 +389,6 @@ def save_jobs_to_csv(jobs, filename='trabajos_diarios_jobs.csv'):
 
 def save_jobs_to_json(jobs, filename='trabajos_diarios_jobs.json'):
     """Save all jobs to JSON"""
-    # Keep booleans as booleans in JSON
     with open(filename, 'w', encoding='utf-8') as f:
         json.dump(jobs, f, ensure_ascii=False, indent=4)
     print(f"✓ {len(jobs)} jobs saved to {filename}")
@@ -431,26 +396,42 @@ def save_jobs_to_json(jobs, filename='trabajos_diarios_jobs.json'):
 
 # --- MAIN EXECUTION ---
 if __name__ == "__main__":
-    listing_url = "https://trabajosdiarios.co.cr/ofertas-trabajo/en-san-jose"
-    max_pages_to_scrape = 3
-    max_jobs_to_scrape = None
+    max_pages_per_location = 3
+    max_jobs_per_location = None  # Set to a number to limit jobs per location
 
     print("=" * 70)
-    print("TRABAJOS DIARIOS - JOB SCRAPER (Improved Category + Description handling)")
+    print("TRABAJOS DIARIOS - MULTI-LOCATION JOB SCRAPER")
     print("=" * 70)
-    print(f"Target URL: {listing_url}")
-    print(f"Max Pages: {max_pages_to_scrape}")
-    print(f"Max Jobs: {max_jobs_to_scrape if max_jobs_to_scrape else 'All'}")
+    print(f"Locations to scrape: {len(LOCATIONS)}")
+    print(f"Max Pages per location: {max_pages_per_location}")
+    print(f"Max Jobs per location: {max_jobs_per_location if max_jobs_per_location else 'All'}")
     print("=" * 70)
 
-    jobs = scrape_job_listings(listing_url, max_pages=max_pages_to_scrape, max_jobs=max_jobs_to_scrape)
+    all_jobs = []
+    
+    for i, location_url in enumerate(LOCATIONS, 1):
+        location_name = location_url.split('/')[-1].replace('en-', '').title()
+        print(f"\n{'='*70}")
+        print(f"LOCATION {i}/{len(LOCATIONS)}: {location_name}")
+        print(f"{'='*70}")
+        
+        jobs = scrape_job_listings(location_url, max_pages=max_pages_per_location, max_jobs=max_jobs_per_location)
+        all_jobs.extend(jobs)
+        
+        print(f"\n✓ Collected {len(jobs)} jobs from {location_name}")
+        print(f"Total jobs so far: {len(all_jobs)}")
+        
+        # Wait between locations to be polite
+        if i < len(LOCATIONS):
+            print("\nWaiting 5 seconds before next location...")
+            time.sleep(5)
 
-    if jobs:
+    if all_jobs:
         print("\n" + "=" * 70)
-        print(f"SCRAPING COMPLETE - {len(jobs)} jobs collected")
+        print(f"SCRAPING COMPLETE - {len(all_jobs)} total jobs collected")
         print("=" * 70)
-        save_jobs_to_csv(jobs)
-        save_jobs_to_json(jobs)
+        save_jobs_to_csv(all_jobs)
+        save_jobs_to_json(all_jobs)
         print("\n✓ All done!")
     else:
         print("\n✗ No jobs were scraped")
