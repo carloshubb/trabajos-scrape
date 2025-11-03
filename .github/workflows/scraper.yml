@@ -2,8 +2,7 @@ name: Run TrabajosDiarios Scraper
 
 on:
   workflow_dispatch:       # allows manual trigger
-  schedule:
-    - cron: "0 4 * * 1"    # runs every day at 03:00 UTC
+  
 
 jobs:
   scrape:
